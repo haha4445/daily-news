@@ -9,6 +9,8 @@ holidays.json
 # ===== 临时文件 =====
 *.tmp
 *.log
+# 计划任务运行日志
+logs/
 
 # ===== 编辑器与系统 =====
 .vscode/

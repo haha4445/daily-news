@@ -320,8 +320,8 @@ node news-digest.mjs --update-holidays --year 2027
 
 | 项 | 值 |
 |---|---|
-| 标题 | 每日新闻汇总（08:00 / 12:00 / 18:00） |
-| 调度 | `cron: 0 8,12,18 * * *`，时区 `Asia/Shanghai`（工作日由脚本闸门再筛一次） |
+| 标题 | 每日新闻汇总（10:00 / 13:00 / 17:00） |
+| 调度 | `cron: 0 10,13,17 * * *`，时区 `Asia/Shanghai`（工作日由脚本闸门再筛一次） |
 | 任务 id | `schedule-42a46274-8f84-4141-839c-5c08ac08bc09` |
 | 归属 | **当前这个会话**（提醒会投递到本会话） |
 | 状态 | `scheduled` |
@@ -332,8 +332,13 @@ node news-digest.mjs --update-holidays --year 2027
 ### 6.2 三条必须知道的限制
 
 1. **要开应用**：它不是系统级守护进程。
-2. **每次触发会消耗一次模型调用**：到点后 DSH 是往本会话投递一条用户消息，由模型执行脚本再汇报内容。
-   三次触发 = 三次模型调用。想省 token 就把时间点减到 1 个，或改用第 7 节的 Windows 计划任务。
+2. **每次触发都会消耗 token**（会有一次真实的模型调用）：到点后 DSH 做的是**往本会话投递一条用户消息**，
+   由模型执行脚本再把内容汇报给你。这条消息会把**整个会话的上下文**一起送进模型，所以：
+   - 三次触发 = 三次模型调用，而且这个会话越长、每次越贵；
+   - 即使是休息日（脚本退出码 2、只回一个 `—`），也一样会消耗一次调用。
+
+   **完全不想花 token** → 用第 7 节的 Windows 计划任务（零模型调用），然后把这里的 DSH 任务删掉。
+   两者可以共存，也可以只留一个。
 3. **不保证恰好一次**：宿主重启/崩溃恢复时同一次触发可能重复投递。脚本本身幂等（同日重跑覆盖同名文件），
    配合 🆕 增量标记也不会看到重复内容。
 
@@ -388,31 +393,84 @@ DSH 的定时任务是**可选的实验性 bundle**：侧栏 → 插件管理 �
 
 ---
 
-## 7. 定时运行 · 方案 B：Windows 任务计划程序（强烈建议同时挂上）
+## 7. 定时运行 · 方案 B：Windows 任务计划程序（推荐，零 token）
 
-上一节说过 DSH 定时任务**关掉应用就不跑**。如果你要求"每天一定有一份日报落盘"，
-用系统级计划任务兜底——它不受 DSH 是否运行影响，也**不消耗任何模型调用**：
+这是**完全脱离 DSH 会话**的运行方式：Windows 自己按点拉起 node，不经过任何模型，
+所以**不消耗 token**，也不需要 DSH 应用开着。
+
+| | DSH 定时任务 | Windows 计划任务 |
+|---|---|---|
+| 消耗 token | ✅ 每次触发一次模型调用（含整个会话上下文） | ❌ 零消耗 |
+| DSH 关掉后 | 不跑 | 照跑 |
+| 产物 | 摘要**推进聊天窗口** + 本地文件 | 只有本地文件 |
+| 何时该用 | 你想"到点在对话里看到摘要" | 你只要"每天有一份日报落盘" |
+
+### 7.1 开关脚本 `windows-task.ps1`
+
+一个脚本管全部：装、卸、启、停、看、跑、查日志。
 
 ```powershell
 cd C:\path\to\news-digest
-.\register-windows-task.ps1 -At 08:00                  # 注册/覆盖同名任务
-.\register-windows-task.ps1 -At 07:30 -OutDir D:\news  # 换时间和输出目录
-.\register-windows-task.ps1 -Remove                    # 卸载
+.\windows-task.ps1                                     # 看状态（默认动作）
+.\windows-task.ps1 -Action Install                     # 安装/更新，默认 10:00/13:00/17:00
+.\windows-task.ps1 -Action Install -At 08:00,20:00     # 换时间点
+.\windows-task.ps1 -Action Install -OutDir D:\news     # 换输出目录（要绝对路径）
+.\windows-task.ps1 -Action Install -ExtraArgs '--max 60'   # 固化额外参数
+.\windows-task.ps1 -Action Disable                     # 临时停用（配置保留）
+.\windows-task.ps1 -Action Enable                      # 恢复
+.\windows-task.ps1 -Action Run                         # 现在就跑一次（等效手动运行，不花 token）
+.\windows-task.ps1 -Action Log                         # 看最近一次运行日志的结尾
+.\windows-task.ps1 -Action Remove                      # 彻底卸载
 ```
 
-等价的裸命令：
+- **重复执行 `-Action Install` 就是"保存当前设置"**：同名任务被覆盖，不用先卸载。
+- 时间点写 24 小时制 `HH:mm`，多个用逗号分隔。**不需要也不要在计划任务里排除周末**——
+  节假日/调休由脚本自己判断，所以每天触发就是正确配置。
+- 手动跑一次也有**两种**方式：双击 `run-digest.cmd`（跑完 `pause`，适合看输出），
+  或 `.\windows-task.ps1 -Action Run`（会额外写日志，适合排查）。
+
+### 7.2 当前状态
+
+本机**已安装** `DailyNewsDigest`，每天 **10:00 / 13:00 / 17:00** 触发，下次运行时间是下一天 10:00。
+用 `.\windows-task.ps1` 可随时查看。
+
+### 7.3 实现要点（为什么这么写）
+
+- 计划任务的动作是 `pwsh -File windows-task.ps1 -Action Run`，而不是直接跑 node：
+  这样每次运行都会把输出**逐行落盘**到 `logs\digest-<日期>.log`，并把脚本的真实退出码回传给计划任务
+  （`Get-ScheduledTaskInfo` 的"上次结果"会显示 `0 成功 / 1 报错 / 2 休息日跳过 / 3 无新增`）。
+- 用 **node 的绝对路径**（计划任务不读你的 PATH），并设置工作目录为脚本目录。
+- 勾选 **"错过触发后尽快启动"**（`-StartWhenAvailable`）：笔记本合盖、关机、休眠错过的时间点，
+  开机后会补跑一次（只补一次，不会把三次都补上）。
+- 默认主体是**"只在用户登录时运行"（Interactive，无需管理员）**。
+  如果希望锁屏/未登录也跑，用**管理员** PowerShell 重新注册并改用 S4U：
+
+  ```powershell
+  $a = New-ScheduledTaskAction -Execute 'C:\Program Files\PowerShell\7\pwsh.exe' `
+       -Argument '-NoProfile -ExecutionPolicy Bypass -File "C:\path\to\news-digest\windows-task.ps1" -Action Run' `
+       -WorkingDirectory 'C:\path\to\news-digest'
+  $t = New-ScheduledTaskTrigger -Daily -At 10:00
+  $p = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType S4U
+  Register-ScheduledTask -TaskName DailyNewsDigest -Action $a -Trigger $t -Principal $p -Force
+  ```
+
+- ⚠️ **不要在 DSH 沙箱里运行这个脚本**：沙箱禁止访问任务计划程序服务，
+  会报"拒绝访问"或"系统找不到指定的路径"。请开一个**普通 PowerShell 窗口**运行。
+  （脚本会检测这种情况并给出提示，不会误报成"未安装"。）
+
+两个方案可以共存：Windows 任务保证**一定落盘**，DSH 任务负责**把摘要推进会话**。
+只想省钱就把 DSH 那条删掉（见 6.3 节）。
+
+---
+
+**等价的裸命令**（不想用脚本时）：
 
 ```powershell
-schtasks /Create /TN "DailyNewsDigest" /SC DAILY /ST 08:00 /F `
+schtasks /Create /TN "DailyNewsDigest" /SC DAILY /ST 10:00 /F `
   /TR "node C:\path\to\news-digest\news-digest.mjs"
 ```
 
-注册脚本额外做了三件事：用 `node` 的绝对路径（计划任务不读你的 PATH）、设置工作目录、
-勾选 **"错过触发后尽快启动"**（`-StartWhenAvailable`，笔记本合盖/关机后补跑一次）。
-
-> 注意：脚本自己会判断节假日，所以**每天触发一次**就是正确配置，不需要在计划任务里排除周末。
-
-两个方案可以共存：Windows 任务保证**一定落盘**，DSH 任务负责**把摘要推进会话**。
+缺点是只能一个时间点、没有日志、退出码也看不出来，所以只建议应急用。
 
 ---
 
@@ -422,11 +480,12 @@ schtasks /Create /TN "DailyNewsDigest" /SC DAILY /ST 08:00 /F `
 
 ### 8.1 时间点在哪里改
 
-DSH 定时任务的时间就是一个 **cron 表达式**，改它即可：
+DSH 定时任务的时间就是一个 **cron 表达式**，改它即可（Windows 计划任务则用
+`.\windows-task.ps1 -Action Install -At 10:00,13:00,17:00` 重装一次）：
 
 | 想要的效果 | cron 表达式 |
 |---|---|
-| 08:00 / 12:00 / 18:00（当前配置） | `0 8,12,18 * * *` |
+| 10:00 / 13:00 / 17:00（当前配置） | `0 10,13,17 * * *` |
 | 每 2 小时一次（8–22 点） | `0 8-22/2 * * *` |
 | 早中晚 + 睡前 | `0 7,12,18,22 * * *` |
 | 每 30 分钟 | `*/30 * * * *` |
@@ -446,7 +505,7 @@ DSH 定时任务的时间就是一个 **cron 表达式**，改它即可：
 想要每次运行都留痕，把模板加上 `{time}`（HHmm）：
 
 ```jsonc
-"fileNameTemplate": "news-{date}-{time}.md"   // → news-2026-10-10-0800.md / -1200.md / -1800.md
+"fileNameTemplate": "news-{date}-{time}.md"   // → news-2026-10-10-1000.md / -1300.md / -1700.md
 ```
 
 ### 8.3 增量：避免重复刷屏
@@ -476,7 +535,7 @@ node news-digest.mjs --new-only     # 只含新增条目，文件名加 -new，�
 | # | 位置 | 搬完怎么办 |
 |---|---|---|
 | 1 | DSH 定时任务的提示词里写的目录 | 让我用 `schedule_update` 改提示词，或在自动化任务页面里编辑指令 |
-| 2 | Windows 计划任务（如果注册过） | 重新跑 `register-windows-task.ps1`（`-Force` 覆盖），它记录的是绝对路径 |
+| 2 | Windows 计划任务（如果注册过） | 重新跑 `windows-task.ps1 -Action Install`（同名覆盖），它记录的是绝对路径 |
 | 3 | `run-digest.cmd` | 用的是 `%~dp0`（脚本自身目录），**不用改** |
 | 4 | `config.json` 里的 `outputDir` | 若是绝对路径（如 `D:\news`）就保持；相对路径跟着配置文件走，**不用改** |
 
@@ -500,7 +559,7 @@ Access to the path 'C:\path\to\probe' is denied.
 
 - **想留在工作区内** → 把整个 `news-digest` 文件夹剪切到工作区里任意子目录，然后让我改一下定时任务的路径。
 - **想放到工作区外**（例如 `D:\tools\news-digest`）→ 推荐：
-  1. 用 `schtasks`（第 7 节）让它跑，这条路径完全不受沙箱影响；
+  1. 用 Windows 计划任务（第 7 节）让它跑，这条路径完全不受沙箱影响；
   2. 同时把 DSH 定时任务删掉，或只保留它做"把摘要推进会话"的角色并放宽沙箱策略（会降低安全边界，不建议）。
 - 只让**日报文件**落到别处（脚本还在工作区内）：把 `outputDir` 或 `--out` 指向工作区外同样会被拒；
   要么放工作区内，要么改用 Windows 计划任务。
@@ -515,7 +574,8 @@ news-digest/
 ├─ config.json                输出目录、条数、节假日源链、数据源清单
 ├─ holidays.json              节假日缓存（自动生成，含来源与获取时间，可手工维护）
 ├─ state/last-run.json        当天已出现条目（增量对比用，自动生成）
-├─ register-windows-task.ps1  注册/卸载 Windows 计划任务
+├─ windows-task.ps1           Windows 计划任务开关脚本（装/卸/启停/查看/试跑/看日志）
+├─ logs/digest-<日期>.log     计划任务每次运行的完整输出（自动生成）
 ├─ run-digest.cmd             双击即跑（CP936 编码）
 ├─ LICENSE                    MIT
 ├─ README.md
@@ -552,7 +612,16 @@ news-digest/
 - **`Access to the path ... is denied`**：写到了会话工作区之外，见第 9 节。
 - **节假日判断总是"周一至周五"**：当年数据还没发布（占位文件为空）。脚本不会缓存空结果，
   发布后首次运行会自动补上；也可以 `--update-holidays` 手动强制刷新一次。
-- **定时任务没触发**：确认 DSH 应用正在运行（关掉就不会跑）；确认会话没被归档；确认 bundle 还启用着。
+- **计划任务跑了但没生成文件**：先 `.\windows-task.ps1 -Action Log` 看日志；再看状态里的"上次结果"——
+  `2` 是休息日跳过（正常），`3` 是无新增，`1` 才是真报错。
+- **`无法访问 Windows 任务计划程序服务：拒绝访问`**：你在 DSH 沙箱里跑了 `windows-task.ps1`。
+  沙箱禁止访问任务计划程序，换一个**普通 PowerShell 窗口**即可（脚本本身不需要管理员）。
+- **改了 `-At` 但时间没变**：`Install` 是覆盖同名任务，确认命令里确实带了新的 `-At`，
+  再用 `.\windows-task.ps1` 复核。
+- **计划任务里 node 路径失效**：如果 node 是用 fnm/nvm 装的，默认版本切换后绝对路径会变。
+  重新跑一次 `windows-task.ps1 -Action Install` 让它记下新路径。
+- **定时任务没触发（DSH）**：确认 DSH 应用正在运行（关掉就不会跑）；确认会话没被归档；确认 bundle 还启用着。
+  如果你已经不想要这条，直接删掉它（6.3 节），靠第 7 节的 Windows 计划任务就够了。
 
 ---
 
