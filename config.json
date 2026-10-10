@@ -8,6 +8,10 @@
   "briefCount": 15,
   "perSourceMax": 5,
   "summaryMaxChars": 120,
+
+  "maxAgeHours": 48,
+  "dropUndatedSources": true,
+
   "enrichFromArticle": false,
   "fetchConcurrency": 4,
   "fetchTimeoutMs": 15000,
@@ -32,6 +36,7 @@
       { "kind": "holiday-cn", "url": "https://cdn.jsdelivr.net/gh/NateScarlet/holiday-cn@master/{year}.json" },
       { "kind": "holiday-cn", "url": "https://fastly.jsdelivr.net/gh/NateScarlet/holiday-cn@master/{year}.json" },
       { "kind": "holiday-cn", "url": "https://ghproxy.net/https://raw.githubusercontent.com/NateScarlet/holiday-cn/master/{year}.json" },
+      { "kind": "github-file", "url": "https://api.github.com/repos/NateScarlet/holiday-cn/contents/{year}.json" },
       { "kind": "timor", "url": "https://timor.tech/api/holiday/year/{year}" }
     ],
     "onNonWorkday": "skip"
@@ -66,21 +71,21 @@
       "max": 10
     },
     {
-      "id": "people-politics",
+      "id": "weibo-hot",
       "enabled": true,
-      "kind": "rss",
-      "name": "人民网·时政",
-      "category": "要闻",
-      "url": "http://www.people.com.cn/rss/politics.xml",
-      "max": 5
+      "kind": "weibo",
+      "name": "微博热搜",
+      "category": "热点",
+      "url": "https://weibo.com/ajax/side/hotSearch",
+      "max": 10
     },
     {
-      "id": "xinhua-politics",
+      "id": "chinanews-import",
       "enabled": true,
       "kind": "rss",
-      "name": "新华网·时政",
+      "name": "中新网·要闻",
       "category": "要闻",
-      "url": "http://www.xinhuanet.com/politics/news_politics.xml",
+      "url": "https://www.chinanews.com.cn/rss/importnews.xml",
       "max": 5
     },
     {
@@ -93,48 +98,48 @@
       "max": 5
     },
     {
-      "id": "people-world",
+      "id": "chinanews-world",
       "enabled": true,
       "kind": "rss",
-      "name": "人民网·国际",
+      "name": "中新网·国际",
       "category": "国际",
-      "url": "http://www.people.com.cn/rss/world.xml",
-      "max": 4
+      "url": "https://www.chinanews.com.cn/rss/world.xml",
+      "max": 5
     },
     {
-      "id": "xinhua-world",
+      "id": "wallstreetcn-global",
       "enabled": true,
-      "kind": "rss",
-      "name": "新华网·国际",
+      "kind": "wallstreetcn",
+      "name": "华尔街见闻·全球快讯",
       "category": "国际",
-      "url": "http://www.xinhuanet.com/world/news_world.xml",
-      "max": 4
+      "url": "https://api-one.wallstcn.com/apiv1/content/lives?channel=global-channel&client=pc&limit=30",
+      "max": 6
     },
     {
-      "id": "people-finance",
+      "id": "eastmoney-724",
       "enabled": true,
-      "kind": "rss",
-      "name": "人民网·财经",
+      "kind": "eastmoney-kuaixun",
+      "name": "东方财富·7×24快讯",
       "category": "财经",
-      "url": "http://www.people.com.cn/rss/finance.xml",
+      "url": "https://newsapi.eastmoney.com/kuaixun/v1/getlist_102_ajaxResult_50_1_.html",
+      "max": 6
+    },
+    {
+      "id": "eastmoney-news",
+      "enabled": true,
+      "kind": "eastmoney-news",
+      "name": "东方财富·要闻",
+      "category": "财经",
+      "url": "https://np-listapi.eastmoney.com/comm/web/getNewsByColumns?client=web&biz=web_news_col&column=345&order=1&needInteractData=0&page_index=1&page_size=20&req_trace=1",
       "max": 4
     },
     {
-      "id": "people-it",
+      "id": "chinanews-finance",
       "enabled": true,
       "kind": "rss",
-      "name": "人民网·IT",
-      "category": "科技",
-      "url": "http://www.people.com.cn/rss/it.xml",
-      "max": 4
-    },
-    {
-      "id": "xinhua-tech",
-      "enabled": true,
-      "kind": "rss",
-      "name": "新华网·科技",
-      "category": "科技",
-      "url": "http://www.xinhuanet.com/tech/news_tech.xml",
+      "name": "中新网·财经",
+      "category": "财经",
+      "url": "https://www.chinanews.com.cn/rss/finance.xml",
       "max": 4
     },
     {
@@ -145,6 +150,33 @@
       "category": "科技",
       "url": "https://www.ithome.com/rss/",
       "max": 5
+    },
+    {
+      "id": "tmtpost",
+      "enabled": true,
+      "kind": "rss",
+      "name": "钛媒体",
+      "category": "科技",
+      "url": "https://www.tmtpost.com/rss",
+      "max": 3
+    },
+    {
+      "id": "leiphone",
+      "enabled": true,
+      "kind": "rss",
+      "name": "雷锋网",
+      "category": "科技",
+      "url": "https://www.leiphone.com/feed",
+      "max": 3
+    },
+    {
+      "id": "ifanr",
+      "enabled": true,
+      "kind": "rss",
+      "name": "爱范儿",
+      "category": "科技",
+      "url": "https://www.ifanr.com/feed",
+      "max": 3
     },
     {
       "id": "sspai",
@@ -175,20 +207,11 @@
     },
     {
       "id": "baidu-game",
-      "enabled": true,
+      "enabled": false,
       "kind": "baidu",
       "name": "百度热搜·游戏",
       "category": "娱乐",
       "url": "https://top.baidu.com/board?tab=game",
-      "max": 3
-    },
-    {
-      "id": "baidu-movie",
-      "enabled": false,
-      "kind": "baidu",
-      "name": "百度热搜·电影",
-      "category": "娱乐",
-      "url": "https://top.baidu.com/board?tab=movie",
       "max": 3
     },
     {

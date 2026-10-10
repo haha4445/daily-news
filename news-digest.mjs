@@ -266,6 +266,21 @@ function isDateString(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(`${value}T00:00:00Z`));
 }
 
+/**
+ * 解析中国时区的日期时间。
+ * 东方财富等接口返回 "2026-10-10 17:17:11"（无时区信息），必须显式按 +08:00 解析，
+ * 否则换台机器（不同系统时区）就会算错新鲜度。也接受 unix 秒/毫秒时间戳。
+ */
+function parseChinaTime(value) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return new Date(value > 1e12 ? value : value * 1000).toISOString();
+  }
+  const match = String(value ?? "").match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/);
+  if (!match) return undefined;
+  const parsed = Date.parse(`${match[1]}-${match[2]}-${match[3]}T${match[4]}:${match[5]}:${match[6] ?? "00"}+08:00`);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : undefined;
+}
+
 //#endregion
 
 //#region 节假日数据：多源拉取、自动缓存、自动预取新一年
@@ -537,6 +552,61 @@ const ADAPTERS = {
     return parseFeed(xml);
   },
 
+  /** 微博热搜：必须带 Referer，否则返回 403。 */
+  async weibo(source, ctx) {
+    const payload = await fetchJson(source.url, {
+      ...ctx.fetchOptions,
+      headers: { referer: "https://weibo.com/" },
+    });
+    const list = payload?.data?.realtime ?? [];
+    return list.map((entry, index) => {
+      const word = entry.word ?? entry.note ?? "";
+      return {
+        title: htmlToText(word),
+        url: `https://s.weibo.com/weibo?q=${encodeURIComponent(entry.word_scheme || `#${word}#`)}&t=31&band_rank=${index + 1}&Refer=top`,
+        summary: htmlToText(entry.note && entry.note !== word ? entry.note : ""),
+        hot: Number(entry.num) || undefined,
+        rank: index + 1,
+        tag: entry.label_name || undefined,
+      };
+    });
+  },
+
+  /** 华尔街见闻·全球快讯（display_time 是 unix 秒）。 */
+  async wallstreetcn(source, ctx) {
+    const payload = await fetchJson(source.url, ctx.fetchOptions);
+    return (payload?.data?.items ?? []).map((entry) => ({
+      title: htmlToText(entry.title || entry.content_text || ""),
+      url: entry.uri || `https://wallstreetcn.com/livenews/${entry.id}`,
+      summary: htmlToText(entry.content_text || ""),
+      published: parseChinaTime(Number(entry.display_time)),
+    }));
+  },
+
+  /** 东方财富 7×24 快讯：返回 `var ajaxResult={...}` 形式的 JSONP。 */
+  async "eastmoney-kuaixun"(source, ctx) {
+    const text = await fetchText(source.url, ctx.fetchOptions);
+    const payload = JSON.parse(text.replace(/^[^=]*=/, "").replace(/;\s*$/, ""));
+    return (payload?.LivesList ?? []).map((entry) => ({
+      title: htmlToText(entry.title || ""),
+      url: entry.url_unique || entry.url_w || "",
+      // digest 以【标题】开头，去掉以免和 title 重复
+      summary: htmlToText(String(entry.digest ?? "").replace(/^【[^】]*】/, "")),
+      published: parseChinaTime(entry.showtime),
+    }));
+  },
+
+  /** 东方财富·要闻列表。 */
+  async "eastmoney-news"(source, ctx) {
+    const payload = await fetchJson(source.url, ctx.fetchOptions);
+    return (payload?.data?.list ?? []).map((entry) => ({
+      title: htmlToText(entry.title || ""),
+      url: entry.uniqueUrl || entry.url || "",
+      summary: htmlToText(String(entry.summary ?? "").replace(/^【[^】]*】/, "")),
+      published: parseChinaTime(entry.showTime),
+    }));
+  },
+
   /** 知乎日报（无需登录的公开接口）。 */
   async "zhihu-daily"(source, ctx) {
     const payload = await fetchJson(source.url, ctx.fetchOptions);
@@ -594,6 +664,61 @@ async function collectSource(source, ctx, log) {
       sourceName: source.name,
       category: source.category ?? "其他",
     }));
+}
+
+//#endregion
+
+//#region 时效过滤：把"旧闻"和"无法证明时效的源"挡在日报之外
+
+/**
+ * 两道防线：
+ *  1) 单条过滤：带发布时间的条目，超过 maxAgeHours 一律丢弃；
+ *  2) 整源过滤：RSS/Atom 源如果**所有条目都没有日期**，就无法证明时效性——直接跳过整个源。
+ *     这条是针对"官方 RSS 早已停更但仍在提供陈旧 XML"的情形（人民网/新华网就是如此）。
+ * 热榜类接口（百度/头条/微博/东财/华尔街见闻）本身就是实时榜或自带时间，不受第 2 条影响。
+ */
+function applyFreshness(items, config, log) {
+  const maxAgeHours = config.maxAgeHours ?? 48;
+  const now = Date.now();
+  const bySource = new Map();
+  for (const item of items) {
+    if (!bySource.has(item.sourceId)) bySource.set(item.sourceId, []);
+    bySource.get(item.sourceId).push(item);
+  }
+
+  const kept = [];
+  const skippedSources = [];
+  const staleBySource = [];
+  let droppedStale = 0;
+  for (const [sourceId, list] of bySource) {
+    const source = config.sources.find((s) => s.id === sourceId);
+    const dated = list.filter((item) => item.published);
+    if (source?.kind === "rss" && (config.dropUndatedSources ?? true) && dated.length === 0) {
+      skippedSources.push(source?.name ?? sourceId);
+      continue;
+    }
+    let stale = 0;
+    for (const item of list) {
+      if (item.published) {
+        const ageHours = (now - Date.parse(item.published)) / 3600000;
+        if (Number.isFinite(ageHours) && ageHours > maxAgeHours) {
+          stale += 1;
+          continue;
+        }
+      }
+      kept.push(item);
+    }
+    droppedStale += stale;
+    if (stale > 0) staleBySource.push(`${source?.name ?? sourceId} ${stale} 条`);
+  }
+
+  if (skippedSources.length > 0) {
+    log.warn(`✗ 跳过无出版日期的源（无法确认时效）：${skippedSources.join("、")}`);
+  }
+  if (staleBySource.length > 0) {
+    log.info(`时效过滤：丢弃超过 ${maxAgeHours} 小时的旧闻 —— ${staleBySource.join("、")}`);
+  }
+  return { items: kept, skippedSources, droppedStale, maxAgeHours };
 }
 
 //#endregion
@@ -829,6 +954,23 @@ function formatNumber(value) {
   return Number(value).toLocaleString("en-US");
 }
 
+/** 把 ISO 发布时间渲染成指定时区的「MM-DD HH:mm」，方便核对时效。 */
+function formatPublished(iso, timeZone) {
+  if (!iso) return "";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  const parts = new Intl.DateTimeFormat("zh-CN", {
+    timeZone,
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
+  const get = (type) => parts.find((p) => p.type === type)?.value ?? "";
+  return `${get("month")}-${get("day")} ${get("hour")}:${get("minute")}`;
+}
+
 /** 拼一行"节假日数据从哪来"的说明，方便判断本地缓存是否跟上新一年。 */
 function holidayDataNote(holiday) {
   if (!holiday?.years) return "";
@@ -840,8 +982,10 @@ function holidayDataNote(holiday) {
 }
 
 function renderMarkdown(context) {
-  const { date, weekdayLabel, generatedAt, zone, holiday, sourcesUsed, items, config, banner, llmUsed, delta, incremental } =
-    context;
+  const {
+    date, weekdayLabel, generatedAt, zone, holiday, sourcesUsed, items, config, banner, llmUsed, delta, incremental,
+    freshness,
+  } = context;
   const tracked = Boolean(config.trackNewItems);
   const newMark = (item) => (tracked && item.isNew ? "🆕 " : "");
   const lines = [];
@@ -863,6 +1007,12 @@ function renderMarkdown(context) {
         ? `> 本次新增：${delta.newCount} 条（对比当天 ${delta.previousAt} 的上一次运行，上次共 ${delta.previousCount} 条）`
         : `> 本次新增：${delta.newCount} 条（当天首次运行）`,
     );
+  }
+  if (freshness) {
+    const bits = [`只保留 ${freshness.maxAgeHours} 小时内的条目`];
+    if (freshness.droppedStale > 0) bits.push(`丢弃旧闻 ${freshness.droppedStale} 条`);
+    if (freshness.skippedSources.length > 0) bits.push(`跳过无日期源：${freshness.skippedSources.join("、")}`);
+    lines.push(`> 时效过滤：${bits.join(" · ")}`);
   }
   lines.push(`> 摘要方式：${llmUsed ? "DeepSeek 模型改写" : "源摘要 + 规则截断（零依赖）"}`);
   if (banner) lines.push(`> 注意：${banner}`);
@@ -891,6 +1041,7 @@ function renderMarkdown(context) {
       lines.push("");
       const meta = [`来源：${item.sourceName}`];
       if (tracked) meta.push(item.isNew ? "状态：本次新增" : "状态：沿用上次");
+      if (item.published) meta.push(`发布：${formatPublished(item.published, zone)}`);
       if (item.rank) meta.push(`榜位：第 ${item.rank} 位`);
       if (item.hot) meta.push(`热度：${formatNumber(item.hot)}`);
       if (item.tag) meta.push(`标记：${item.tag}`);
@@ -932,6 +1083,8 @@ const DEFAULT_CONFIG = {
   briefCount: 15,
   perSourceMax: 5,
   summaryMaxChars: 120,
+  maxAgeHours: 48,
+  dropUndatedSources: true,
   enrichFromArticle: false,
   fetchConcurrency: 4,
   fetchTimeoutMs: 15000,
@@ -1090,8 +1243,10 @@ async function main() {
   if (items.length === 0) throw new Error("所有数据源都失败了，未生成日报");
   log.info(`原始条目：${items.length} 条｜可用数据源：${sourcesUsed.length}/${enabled.length}`);
 
-  // 3) 去重与挑选
-  const unique = dedupe(items, log);
+  // 3) 时效过滤 → 去重 → 挑选
+  const fresh = applyFreshness(items, config, log);
+  if (fresh.items.length === 0) throw new Error("时效过滤后没有剩余条目，请检查数据源或放宽 maxAgeHours");
+  const unique = dedupe(fresh.items, log);
   let picked = interleave(unique, config.maxItems);
   log.info(`最终入选：${picked.length} 条`);
 
@@ -1127,7 +1282,7 @@ async function main() {
   const generatedAt = `${now.date} ${now.clock}`;
   const markdown = renderMarkdown({
     date, weekdayLabel, generatedAt, zone, holiday, sourcesUsed,
-    items: picked, config, banner, llmUsed, delta, incremental,
+    items: picked, config, banner, llmUsed, delta, incremental, freshness: fresh,
   });
   const timeCompact = now.clock.slice(0, 5).replace(":", "");
   let fileName = (config.fileNameTemplate ?? "news-{date}.md")
