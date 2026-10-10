@@ -1,0 +1,213 @@
+{
+  "outputDir": "./digest",
+  "fileNameTemplate": "news-{date}.md",
+  "keepLatestCopy": true,
+  "writeJsonSidecar": false,
+
+  "maxItems": 40,
+  "briefCount": 15,
+  "perSourceMax": 5,
+  "summaryMaxChars": 120,
+  "enrichFromArticle": false,
+  "fetchConcurrency": 4,
+  "fetchTimeoutMs": 15000,
+  "fetchRetries": 1,
+
+  "categoryOrder": ["热点", "要闻", "国际", "财经", "科技", "社区", "娱乐"],
+
+  "trackNewItems": true,
+  "stateFile": "state/last-run.json",
+
+  "holidayGate": {
+    "enabled": true,
+    "mode": "workday",
+    "timeZone": "Asia/Shanghai",
+    "dataFile": "holidays.json",
+    "autoFetch": true,
+    "prefetchNextYear": true,
+    "prefetchFromMonth": 10,
+    "probeIntervalHours": 24,
+    "discoveryUrl": "https://api.github.com/repos/NateScarlet/holiday-cn/contents",
+    "sources": [
+      { "kind": "holiday-cn", "url": "https://cdn.jsdelivr.net/gh/NateScarlet/holiday-cn@master/{year}.json" },
+      { "kind": "holiday-cn", "url": "https://fastly.jsdelivr.net/gh/NateScarlet/holiday-cn@master/{year}.json" },
+      { "kind": "holiday-cn", "url": "https://ghproxy.net/https://raw.githubusercontent.com/NateScarlet/holiday-cn/master/{year}.json" },
+      { "kind": "timor", "url": "https://timor.tech/api/holiday/year/{year}" }
+    ],
+    "onNonWorkday": "skip"
+  },
+
+  "llm": {
+    "enabled": false,
+    "baseUrl": "https://api.deepseek.com",
+    "model": "deepseek-chat",
+    "apiKeyEnv": "DEEPSEEK_API_KEY",
+    "maxItems": 20,
+    "timeoutMs": 60000
+  },
+
+  "sources": [
+    {
+      "id": "baidu-realtime",
+      "enabled": true,
+      "kind": "baidu",
+      "name": "百度热搜",
+      "category": "热点",
+      "url": "https://top.baidu.com/board?tab=realtime",
+      "max": 10
+    },
+    {
+      "id": "toutiao-hot",
+      "enabled": true,
+      "kind": "toutiao",
+      "name": "今日头条热榜",
+      "category": "热点",
+      "url": "https://www.toutiao.com/hot-event/hot-board/?origin=toutiao_pc",
+      "max": 10
+    },
+    {
+      "id": "people-politics",
+      "enabled": true,
+      "kind": "rss",
+      "name": "人民网·时政",
+      "category": "要闻",
+      "url": "http://www.people.com.cn/rss/politics.xml",
+      "max": 5
+    },
+    {
+      "id": "xinhua-politics",
+      "enabled": true,
+      "kind": "rss",
+      "name": "新华网·时政",
+      "category": "要闻",
+      "url": "http://www.xinhuanet.com/politics/news_politics.xml",
+      "max": 5
+    },
+    {
+      "id": "chinanews-scroll",
+      "enabled": true,
+      "kind": "rss",
+      "name": "中新网·即时",
+      "category": "要闻",
+      "url": "https://www.chinanews.com.cn/rss/scroll-news.xml",
+      "max": 5
+    },
+    {
+      "id": "people-world",
+      "enabled": true,
+      "kind": "rss",
+      "name": "人民网·国际",
+      "category": "国际",
+      "url": "http://www.people.com.cn/rss/world.xml",
+      "max": 4
+    },
+    {
+      "id": "xinhua-world",
+      "enabled": true,
+      "kind": "rss",
+      "name": "新华网·国际",
+      "category": "国际",
+      "url": "http://www.xinhuanet.com/world/news_world.xml",
+      "max": 4
+    },
+    {
+      "id": "people-finance",
+      "enabled": true,
+      "kind": "rss",
+      "name": "人民网·财经",
+      "category": "财经",
+      "url": "http://www.people.com.cn/rss/finance.xml",
+      "max": 4
+    },
+    {
+      "id": "people-it",
+      "enabled": true,
+      "kind": "rss",
+      "name": "人民网·IT",
+      "category": "科技",
+      "url": "http://www.people.com.cn/rss/it.xml",
+      "max": 4
+    },
+    {
+      "id": "xinhua-tech",
+      "enabled": true,
+      "kind": "rss",
+      "name": "新华网·科技",
+      "category": "科技",
+      "url": "http://www.xinhuanet.com/tech/news_tech.xml",
+      "max": 4
+    },
+    {
+      "id": "ithome",
+      "enabled": true,
+      "kind": "rss",
+      "name": "IT之家",
+      "category": "科技",
+      "url": "https://www.ithome.com/rss/",
+      "max": 5
+    },
+    {
+      "id": "sspai",
+      "enabled": true,
+      "kind": "rss",
+      "name": "少数派",
+      "category": "科技",
+      "url": "https://sspai.com/feed",
+      "max": 3
+    },
+    {
+      "id": "solidot",
+      "enabled": true,
+      "kind": "rss",
+      "name": "Solidot",
+      "category": "科技",
+      "url": "https://www.solidot.org/index.rss",
+      "max": 3
+    },
+    {
+      "id": "zhihu-daily",
+      "enabled": true,
+      "kind": "zhihu-daily",
+      "name": "知乎日报",
+      "category": "社区",
+      "url": "https://news-at.zhihu.com/api/4/news/latest",
+      "max": 3
+    },
+    {
+      "id": "baidu-game",
+      "enabled": true,
+      "kind": "baidu",
+      "name": "百度热搜·游戏",
+      "category": "娱乐",
+      "url": "https://top.baidu.com/board?tab=game",
+      "max": 3
+    },
+    {
+      "id": "baidu-movie",
+      "enabled": false,
+      "kind": "baidu",
+      "name": "百度热搜·电影",
+      "category": "娱乐",
+      "url": "https://top.baidu.com/board?tab=movie",
+      "max": 3
+    },
+    {
+      "id": "bilibili-rank",
+      "enabled": false,
+      "kind": "bilibili",
+      "name": "B站全站排行",
+      "category": "社区",
+      "url": "https://api.bilibili.com/x/web-interface/ranking/v2?rid=0&type=all",
+      "max": 3
+    },
+    {
+      "id": "hackernews",
+      "enabled": false,
+      "kind": "hn",
+      "name": "Hacker News",
+      "category": "国际",
+      "url": "https://hacker-news.firebaseio.com/v0/topstories.json",
+      "max": 5
+    }
+  ]
+}

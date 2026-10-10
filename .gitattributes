@@ -1,0 +1,11 @@
+# 行尾与编码约定
+# run-digest.cmd 是 CP936(GBK) 编码 + CRLF 的批处理文件，交给 git 做行尾转换会破坏 cmd 解析，
+# 所以用 -text 明确禁止转换。
+*.cmd -text
+
+*.ps1  text eol=crlf
+*.mjs  text eol=lf
+*.md   text eol=lf
+*.json text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf

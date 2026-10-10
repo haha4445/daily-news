@@ -1,0 +1,22 @@
+# ===== 运行产物（自动生成，不入库）=====
+# 日报输出目录（每天运行时生成）
+digest/
+# 一天内多次运行的增量对比状态
+state/
+# 节假日缓存：首次运行会自动从数据源拉取重建（内含获取时间戳，入库会造成无意义 diff）
+holidays.json
+
+# ===== 临时文件 =====
+*.tmp
+*.log
+
+# ===== 编辑器与系统 =====
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ===== Node（本工具零依赖，留作将来引入依赖时用）=====
+node_modules/
+npm-debug.log*
