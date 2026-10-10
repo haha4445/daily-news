@@ -275,9 +275,12 @@ function parseChinaTime(value) {
   if (typeof value === "number" && Number.isFinite(value)) {
     return new Date(value > 1e12 ? value : value * 1000).toISOString();
   }
-  const match = String(value ?? "").match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/);
+  // 兼顾 "2026-10-10 17:17:11"（东方财富）与 "2026/10/9 17:51:34"（IT之家）两种写法
+  const match = String(value ?? "").match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})[ T](\d{1,2}):(\d{2})(?::(\d{2}))?/);
   if (!match) return undefined;
-  const parsed = Date.parse(`${match[1]}-${match[2]}-${match[3]}T${match[4]}:${match[5]}:${match[6] ?? "00"}+08:00`);
+  const [, year, month, day, hour, minute, second] = match;
+  const pad = (part) => String(part).padStart(2, "0");
+  const parsed = Date.parse(`${year}-${pad(month)}-${pad(day)}T${pad(hour)}:${minute}:${second ?? "00"}+08:00`);
   return Number.isFinite(parsed) ? new Date(parsed).toISOString() : undefined;
 }
 
@@ -544,6 +547,30 @@ const ADAPTERS = {
         rank: index + 1,
       };
     });
+  },
+
+  /** IT之家榜单：https://www.ithome.com/block/rank.html 里 #d-1 日榜 / #d-2 周榜 / #d-3 月榜。
+   *  榜单块只给标题和链接，因此会并发补抓文章页拿到简介（meta description）与发布时间。 */
+  async "ithome-rank"(source, ctx) {
+    const html = await fetchText(source.url, ctx.fetchOptions);
+    const period = source.period ?? "d-1";
+    const segment = html.match(new RegExp(`id=["']${period}["'][\\s\\S]*?</ul>`, "i"))?.[0] ?? "";
+    const entries = [...segment.matchAll(/<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)]
+      .map((match) => ({ url: decodeEntities(match[1]).trim(), title: htmlToText(match[2]) }))
+      .filter((entry) => entry.title && /^https?:/i.test(entry.url));
+    if (entries.length === 0) throw new Error(`榜单块里没有找到 ${period} 的条目`);
+
+    const enrichCount = Math.min(source.enrich ?? entries.length, entries.length);
+    const results = await mapPool(entries.slice(0, enrichCount), 4, async (entry) => {
+      const page = await fetchText(entry.url, { ...ctx.fetchOptions, retries: 0 });
+      const description =
+        page.match(/<meta[^>]+name=["']description["'][^>]*content=["']([^"']+)["']/i)?.[1] ??
+        page.match(/<meta[^>]+content=["']([^"']+)["'][^>]*name=["']description["']/i)?.[1];
+      const published = page.match(/id=["']pubtime_baidu["'][^>]*>([^<]+)</i)?.[1];
+      return { ...entry, summary: htmlToText(description ?? ""), published: parseChinaTime(published) };
+    });
+    const head = results.map((result, index) => (result.ok ? result.value : entries[index]));
+    return [...head, ...entries.slice(enrichCount)].map((entry, index) => ({ ...entry, rank: index + 1 }));
   },
 
   /** 标准 RSS / Atom。 */
@@ -950,8 +977,32 @@ function markNewItems(items, state, date) {
 
 //#region 输出渲染
 
-function formatNumber(value) {
-  return Number(value).toLocaleString("en-US");
+/** 热度压缩显示：1282431 → 128.2万，让单行保持短。 */
+function formatCompactNumber(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return String(value);
+  if (number >= 100000000) return `${(number / 100000000).toFixed(1)}亿`;
+  if (number >= 10000) return `${(number / 10000).toFixed(1)}万`;
+  return String(number);
+}
+
+/** Markdown 链接文本里不能出现裸的 ] 或换行。 */
+function escapeLinkText(text) {
+  return String(text)
+    .replace(/\s+/g, " ")
+    .replace(/[[\]]/g, (char) => `\\${char}`)
+    .trim();
+}
+
+/** 目标地址里的空格与括号会让 Markdown 链接提前结束，统一转义。 */
+function safeUrl(url) {
+  return String(url)
+    .trim()
+    .replace(/\s/g, "%20")
+    .replace(/\(/g, "%28")
+    .replace(/\)/g, "%29")
+    .replace(/</g, "%3C")
+    .replace(/>/g, "%3E");
 }
 
 /** 把 ISO 发布时间渲染成指定时区的「MM-DD HH:mm」，方便核对时效。 */
@@ -1018,40 +1069,17 @@ function renderMarkdown(context) {
   if (banner) lines.push(`> 注意：${banner}`);
   lines.push("");
 
-  lines.push("## 一、摘要速览");
+  // 单一列表：标题本身即链接，点击跳转，不暴露裸地址
+  lines.push(`## 摘要速览（${items.length} 条）`);
   lines.push("");
-  const briefCount = Math.min(config.briefCount ?? 15, items.length);
-  for (let i = 0; i < briefCount; i += 1) {
-    const item = items[i];
-    lines.push(`${i + 1}. ${newMark(item)}**${item.title}** —— ${item.summary}（${item.sourceName}）`);
-  }
+  items.forEach((item, index) => {
+    const meta = [item.sourceName];
+    if (item.hot) meta.push(`热度 ${formatCompactNumber(item.hot)}`);
+    if (item.published) meta.push(formatPublished(item.published, zone));
+    const prefix = `${index + 1}. ${newMark(item)}`;
+    lines.push(`${prefix}[${escapeLinkText(item.title)}](${safeUrl(item.url)}) —— ${item.summary}（${meta.join(" · ")}）`);
+  });
   lines.push("");
-
-  lines.push("## 二、分类详情");
-  const ordered = [...(config.categoryOrder ?? [])];
-  for (const item of items) if (!ordered.includes(item.category)) ordered.push(item.category);
-  for (const category of ordered) {
-    const group = items.filter((item) => item.category === category);
-    if (group.length === 0) continue;
-    lines.push("");
-    lines.push(`### ${category}（${group.length} 条）`);
-    lines.push("");
-    group.forEach((item, index) => {
-      lines.push(`#### ${index + 1}. ${newMark(item)}${item.title}`);
-      lines.push("");
-      const meta = [`来源：${item.sourceName}`];
-      if (tracked) meta.push(item.isNew ? "状态：本次新增" : "状态：沿用上次");
-      if (item.published) meta.push(`发布：${formatPublished(item.published, zone)}`);
-      if (item.rank) meta.push(`榜位：第 ${item.rank} 位`);
-      if (item.hot) meta.push(`热度：${formatNumber(item.hot)}`);
-      if (item.tag) meta.push(`标记：${item.tag}`);
-      if (item.mergedFrom?.length) meta.push(`同题源：${item.mergedFrom.join("、")}`);
-      lines.push(`- ${meta.join(" · ")}`);
-      lines.push(`- 简介：${item.summary}`);
-      lines.push(`- 链接：<${item.url}>`);
-      lines.push("");
-    });
-  }
 
   lines.push("---");
   lines.push("");
@@ -1080,7 +1108,6 @@ const DEFAULT_CONFIG = {
   keepLatestCopy: true,
   writeJsonSidecar: false,
   maxItems: 40,
-  briefCount: 15,
   perSourceMax: 5,
   summaryMaxChars: 120,
   maxAgeHours: 48,
@@ -1248,6 +1275,12 @@ async function main() {
   if (fresh.items.length === 0) throw new Error("时效过滤后没有剩余条目，请检查数据源或放宽 maxAgeHours");
   const unique = dedupe(fresh.items, log);
   let picked = interleave(unique, config.maxItems);
+  // 单一列表也要有阅读顺序：按 categoryOrder 分组（sort 稳定，组内保持逐源轮转的多样性）
+  const categoryRank = (item) => {
+    const index = (config.categoryOrder ?? []).indexOf(item.category);
+    return index < 0 ? 99 : index;
+  };
+  picked.sort((a, b) => categoryRank(a) - categoryRank(b));
   log.info(`最终入选：${picked.length} 条`);
 
   // 3.5) 与当天上一次运行对比，标记新增条目

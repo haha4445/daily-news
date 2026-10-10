@@ -5,7 +5,6 @@
   "writeJsonSidecar": false,
 
   "maxItems": 40,
-  "briefCount": 15,
   "perSourceMax": 5,
   "summaryMaxChars": 120,
 
@@ -143,10 +142,21 @@
       "max": 4
     },
     {
-      "id": "ithome",
+      "id": "ithome-rank",
       "enabled": true,
+      "kind": "ithome-rank",
+      "name": "IT之家·日榜",
+      "category": "科技",
+      "url": "https://www.ithome.com/block/rank.html",
+      "period": "d-1",
+      "enrich": 12,
+      "max": 5
+    },
+    {
+      "id": "ithome",
+      "enabled": false,
       "kind": "rss",
-      "name": "IT之家",
+      "name": "IT之家·最新（RSS）",
       "category": "科技",
       "url": "https://www.ithome.com/rss/",
       "max": 5
